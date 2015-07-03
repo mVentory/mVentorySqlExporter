@@ -47,16 +47,20 @@ namespace mvKudos
                 oCSV.Add("short_description", kudosReader["idescrshort"].ToString());
                 oCSV.Add("price", kudosReader["price"].ToString());
                 oCSV.Add("color", kudosReader["color"].ToString());
-                oCSV.Add("size", kudosReader["size"].ToString());
                 oCSV.Add("product_barcode_", kudosReader["lookupnum"].ToString());
                 oCSV.Add("name", kudosReader["descr"].ToString());
 
                 //Categories are separated by ; and may have a leading/trailing ;
-                string sCategory = kudosReader["category"].ToString();
-                if (sCategory != null) sCategory = sCategory.Trim(new char[] {';'});
-                oCSV.Add("_category", sCategory);
+                string sValue = kudosReader["category"].ToString();
+                if (sValue != null) sValue = sValue.Trim(new char[] { ';' });
+                oCSV.Add("_category", sValue);
+
+                //Sizes get a weird . at the beginning in some products. We don't know what it means, if anything.
+                sValue = kudosReader["size"].ToString();
+                if (sValue != null) sValue = sValue.Trim(new char[] { '.' });
+                oCSV.Add("size", sValue);
                 
-                ///Set in-stock depending on the value of qty
+               ///Set in-stock depending on the value of qty
                 Int64 iQty = ToIntSafe(kudosReader["quantity"].ToString());
                 oCSV.Add("qty", iQty.ToString());
                 if (iQty > 0) { oCSV.Add("is_in_stock", "1"); } else { oCSV.Add("is_in_stock", "0"); }

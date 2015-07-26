@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Configuration;
+using System.IO;
 
 namespace mvKudos
 {
@@ -14,8 +16,15 @@ namespace mvKudos
 
         static void Main(string[] args)
         {
-            string sCsvFile = System.IO.Path.GetTempPath() + "mvKudos_" + Guid.NewGuid().ToString().Substring(0, 5) + ".csv";
-            Console.WriteLine(System.Configuration.ConfigurationManager.AppSettings.Get("WelcomeMsg"));
+            //Check if paths exist
+            string sCsvPath = ConfigurationManager.AppSettings.Get("FtpFolderPathCsv").TrimEnd(new char[] { '\\' }) + "\\";
+            System.IO.Directory.CreateDirectory(sCsvPath);
+            string sImgPath = ConfigurationManager.AppSettings.Get("FtpFolderPathImg").TrimEnd(new char[] { '\\' }) + "\\";
+            System.IO.Directory.CreateDirectory(sImgPath);
+
+            //Generate CSV file name
+            string sCsvFile = sCsvPath + "mvKudos_" + DateTime.Now.ToString("s").Replace(":","") + ".csv";
+            Console.WriteLine(ConfigurationManager.AppSettings.Get("WelcomeMsg"));
             Console.WriteLine("Saving into " + sCsvFile);
 
             mvKudos.DB.exportAllProducts(sCsvFile);

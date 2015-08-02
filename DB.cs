@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using System.Data.SqlClient;
 using System.Configuration;
 using System.IO;
-using System.IO.Compression;
 
 
 
@@ -20,7 +19,9 @@ namespace mvKudos
         /// <returns></returns>
         public static void exportAllProducts(string sCsvFile)
         {
-            ///Get data from the DB. The query is quite elaborate and had to be placed in an external file.
+            Console.WriteLine("Extracting product data from the DB. " + DateTime.Now.ToString("s"));
+
+            //Get data from the DB. The query is quite elaborate and had to be placed in an external file.
             SqlConnection connectionKudos = new SqlConnection(ConfigurationManager.ConnectionStrings["Kudos"].ConnectionString);
             connectionKudos.Open();
             SqlCommand commandGetAllProducts = new SqlCommand(getSqlQuery("GetAllProducts"), connectionKudos);
@@ -34,8 +35,16 @@ namespace mvKudos
             //pepare some constants
             string sUrlPathFormat = ConfigurationManager.AppSettings.Get("UrlPath");
 
-            //Load the list of files exported before
-            System.Collections.Specialized.StringCollection arSavedImageIDs = GetExportedImageIDs();
+            //load IDs of data processed before. The IDs are stored in files as a list in plain text
+            List<long> arSavedImageIDs = GetExportedIDs("ImgIdx"); //Load the list of image files exported before
+            Console.WriteLine("Loaded ImgIdx. " + DateTime.Now.ToString("s"));
+
+            List<long> arSavedRowIDs = GetExportedIDs("DataIdx"); //Load the list of rows exported before
+            Console.WriteLine("Loaded DataIdx. " + DateTime.Now.ToString("s"));
+
+            var arExtractedRowIDs = new List<long>(); //This collection will contain IDs extracted this time to keep the list current
+            //set initial capacity
+            arExtractedRowIDs.Capacity = arSavedRowIDs.Count;
 
             ///Prepare the output CSV file
             var oCSV = new System.Collections.Specialized.NameValueCollection();
@@ -43,11 +52,14 @@ namespace mvKudos
             string sRecord = ConfigurationManager.AppSettings.Get("TemplateAllProductsHeader"); //add the header row
             CSV.AppendLine(sRecord);
 
-            ///Loop through the recordset and read the data
+            //Loop through the recordset and read the data
+            Console.WriteLine("Going through extracted data. " + DateTime.Now.ToString("s"));
+
             while (kudosReader.Read())
             {
                 oCSV.Add("style", kudosReader["code"].ToString());
-                oCSV.Add("sku", kudosReader["id"].ToString());
+                string sSKU = kudosReader["id"].ToString();
+                oCSV.Add("sku", sSKU);
                 oCSV.Add("description", kudosReader["idescrfull"].ToString());
                 oCSV.Add("short_description", kudosReader["idescrshort"].ToString());
                 oCSV.Add("price", kudosReader["price"].ToString());
@@ -55,6 +67,8 @@ namespace mvKudos
                 oCSV.Add("product_barcode_", kudosReader["lookupnum"].ToString());
                 oCSV.Add("name", kudosReader["descr"].ToString());
                 oCSV.Add("sizetm", kudosReader["sizetm"].ToString());
+                oCSV.Add("brand", kudosReader["brand"].ToString());
+                oCSV.Add("qty", kudosReader["quantity"].ToString());
 
                 //Categories are separated by ; and may have a leading/trailing ;
                 string sValue = kudosReader["category"].ToString();
@@ -70,42 +84,49 @@ namespace mvKudos
                 sValue = kudosReader["size"].ToString();
                 if (sValue != null) sValue = sValue.Trim(new char[] { '.' });
                 oCSV.Add("size", sValue);
-                
-               ///Set in-stock depending on the value of qty
-                Int64 iQty = ToIntSafe(kudosReader["quantity"].ToString());
-                oCSV.Add("qty", iQty.ToString());
-                if (iQty > 0) { oCSV.Add("is_in_stock", "1"); } else { oCSV.Add("is_in_stock", "0"); }
 
-                /// Get image details for the product
-                Int64 iStyleID = ToIntSafe(kudosReader["styleid"].ToString());
-                Int64 iColorID = ToIntSafe(kudosReader["colorid"].ToString());
-                string[] sFileNames = RetrieveImages(iStyleID, iColorID, connectionImages, arSavedImageIDs);
+                // Get image details for the product
+                string sImgIDs = kudosReader["imgids"].ToString();
+                if (sImgIDs != null) sImgIDs = sImgIDs.Trim(new char[] { ';' });
+                oCSV.Add("image", sImgIDs);
 
-                //save file names as ;-separate list
-                string sImageNames = "";
-                if (sFileNames != null && sFileNames.Length > 0) 
-                {
-                    for (int i = 0; i < sFileNames.Length; i++)
-                    {
-                        sImageNames += sFileNames[i] + ';';
-                    }
-                    sImageNames = sImageNames.Trim(new char[] { ';' });
-                    oCSV.Add("image", sImageNames); 
-                }
                 //The row for the item is ready to be saved. It contains full item details. Additional rows will contain only some of the details.
                 sRecord = buildCSVRow(oCSV);
-                CSV.AppendLine(sRecord);
+
+                //use a hash of the row to check if the data changed
+                long fHash = CalculateHash(sRecord, sSKU);
+                if (!arSavedRowIDs.Contains(fHash))
+                {
+                    //get any missing images
+                    RetrieveImages(connectionImages, arSavedImageIDs, sImgIDs);
+                    //add the record to the output
+                    CSV.AppendLine(sRecord);
+                }
+                //save the id in a new array to update the list
+                if (!arExtractedRowIDs.Contains(fHash))
+                {
+                    arExtractedRowIDs.Add(fHash);
+                }
+                else
+                {
+                    System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Duplicate hash " + fHash.ToString() + " for: " + sRecord, System.Diagnostics.EventLogEntryType.Warning);
+                }
+
                 oCSV.Clear();
 
             }
 
             connectionKudos.Close(); //Don't need the DB any more.
 
-            //zip up the CSV file
-            CreateCsvArchive(sCsvFile, CSV);
+            //report progress
+            Console.WriteLine("Saving data. " + DateTime.Now.ToString("s"));
 
-            //Save IDs in a file to avoid exporting them again if they were deleted
-            SaveExportedImageIDs(arSavedImageIDs);
+            //Save the data in a temp file with a unique name
+            System.IO.File.WriteAllText(sCsvFile, CSV.ToString());
+
+            //Save Image IDs in a file to avoid exporting them again if they were deleted
+            SaveExportedIDs(arSavedImageIDs, "ImgIdx");
+            SaveExportedIDs(arExtractedRowIDs, "DataIdx");
 
         }
 
@@ -124,71 +145,32 @@ namespace mvKudos
 
 
         /// <summary>
-        /// Converts any string to an int or returns 0 if the value is invalid.
-        /// </summary>
-        /// <param name="Val"></param>
-        /// <returns></returns>
-        static Int64 ToIntSafe(string Val)
-        {
-            try
-            {
-                return Convert.ToInt64(Val);
-            }
-            catch (Exception)
-            {
-                System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Cannot convert value to integer: " + Val);
-                return 0;
-            }
-
-        }
-
-        /// <summary>
-        /// Converts any string to a decimal or returns 0 if the value is invalid.
-        /// </summary>
-        /// <param name="Val"></param>
-        /// <returns></returns>
-        static Decimal ToDecSafe(string Val)
-        {
-            try
-            {
-                return Convert.ToDecimal(Val);
-            }
-            catch (Exception)
-            {
-                System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Cannot convert value to Decimal: " + Val);
-                return 0;
-            }
-
-        }
-
-
-        /// <summary>
         /// Builds a single CSV row using the header as the template and putting the values in the right cells
         /// </summary>
         /// <param name="dbValues"></param>
         /// <returns></returns>
         static string buildCSVRow(System.Collections.Specialized.NameValueCollection dbValues, bool UseDefaultValues = true)
         {
-            ///Prepare the header template
+            //Prepare the header template
             string sHeader = ConfigurationManager.AppSettings.Get("TemplateAllProductsHeader");
             string[] arHeader = sHeader.Split(new char[] { ',' });
 
-            ///Prepare the data row template with placeholders
+            //Prepare the data row template with placeholders
             string sRow = ConfigurationManager.AppSettings.Get("TemplateAllProductsLine");
             string[] arRow = sRow.Split(new char[] { ',' });
 
 
-            ///Loop through the columns and write the values
+            //Loop through the columns and write the values
             string sOutputString = "";
             for (int i = 0; i < arHeader.Length; i++)
             {
                 string sColumn = arHeader[i];
                 string sValue = dbValues.Get(sColumn);
                 if (UseDefaultValues && (sValue == "" || sValue == null) && arRow[i] != "") sValue = arRow[i]; ///use the default value from the row template if no value is provided
-                if (sOutputString != "") sOutputString += ","; ///Add a ,-separator between values, but not for the very first value
-                if (sValue != null) sValue = sValue.Replace("\"", "\"\""); ///Replace all single " with "" for CSV " escaping
+                if (sOutputString != "") sOutputString += ","; //Add a ,-separator between values, but not for the very first value
+                if (sValue != null) sValue = sValue.Replace("\"", "\"\""); //Replace all single " with "" for CSV " escaping
                 sValue = "\"" + sValue + "\""; ///Wrap the value in "" even if it's empty
-                sOutputString += sValue; /// Append to output
+                sOutputString += sValue; // Append to output
             }
 
             return sOutputString;
@@ -201,134 +183,140 @@ namespace mvKudos
         /// <param name="iStyleID"></param>
         /// <param name="iColorID"></param>
         /// <returns></returns>
-        static string[] RetrieveImages(Int64 iStyleID, Int64 iColorID, SqlConnection connectionImages, System.Collections.Specialized.StringCollection arSavedImageIDs)
+        static void RetrieveImages(SqlConnection connectionImages, List<long> arSavedImageIDs, string sImgIDs)
         {
-            if (iStyleID == 0) return null; //No point doing anything if the style ID doesn;t exist
+            if (sImgIDs==null || sImgIDs=="") return; //No point doing anything if there is not enough data
 
-            var oListOfFiles = new System.Collections.Specialized.StringCollection();
-
-            //Prepare SQL query
-            SqlCommand commandGetProductImages = new SqlCommand("select * from [Stock Image] i, [Stock Image Map] m where i.ID=m.[Stock Image ID] and m.[Stock Style ID]=@sid and m.[Stock Colour ID]=@cid", connectionImages);
-            commandGetProductImages.Parameters.Add(new SqlParameter("sid", iStyleID));
-            commandGetProductImages.Parameters.Add(new SqlParameter("cid", iColorID));
-            commandGetProductImages.CommandTimeout = 0;
-            SqlDataReader kudosReader = commandGetProductImages.ExecuteReader();
-
-            //Read the images from the stream and save as files with the image ID as the file name
-            while (kudosReader.Read())
+            //get list of images as an array to check if we already have those images, one by one
+            string[] arImageNames = sImgIDs.ToLower().Split(new char[] {';'});
+            foreach (string sImageName in arImageNames)
             {
-                //prepare file name and path
-                string sFileID = kudosReader["id"].ToString();
-                string sFileName = sFileID + ".jpg";
-                string sFilePath = ConfigurationManager.AppSettings.Get("FtpFolderPathImg").TrimEnd(new char[] { '\\' }) + "\\" + sFileName;
-                //Write binary data into the file if it doesn't exist
-                if (!System.IO.File.Exists(sFilePath) && !arSavedImageIDs.Contains(sFileID))
+                //get the file id
+                long fFileID = 0;
+                long.TryParse(sImageName.Replace(".jpg",""), out fFileID); //all images are .jpg or so we assume
+                if (fFileID <= 0) //sanity check
                 {
-                    byte[] oFileData = (byte[])kudosReader.GetValue(kudosReader.GetOrdinal("Image"));
-                    if (oFileData != null && oFileData.Length > 0)
-                    {
-                        System.IO.File.WriteAllBytes(sFilePath, oFileData); //only save the file if there is data to save
-                        arSavedImageIDs.Add(sFileID); //save the file ID, so that we can remove the file after the tranfer
-                    }
-                    else
-                    {
-                        //reset the name for an empty file and log the problem
-                        System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Encountered an empty file for: " + sFileName);
-                        sFileName = "";
-                    }
-                }
-                else if (!arSavedImageIDs.Contains(sFileID)) // the file may have been exported, but is not in the list - just add it there
-                {
-                    arSavedImageIDs.Add(sFileID);
+                    System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Wrong image file ID: " + sImageName, System.Diagnostics.EventLogEntryType.Warning);
+                    continue;
                 }
 
 
-                //add the file name to the list of files to be returned back to the caller. They come in the sequence order with the main image first.
-                if (sFileName != "") oListOfFiles.Add(ConfigurationManager.AppSettings.Get("FilePrefix") + sFileName);
+                string sFilePath = ConfigurationManager.AppSettings.Get("FtpFolderPathImg").TrimEnd(new char[] { '\\' }) + "\\" + sImageName;
+
+                //check if the image has already been extracted (either the file exists on the disk or it was indexed)
+                if (!arSavedImageIDs.Contains(fFileID) && !System.IO.File.Exists(sFilePath))
+                {
+                    //Prepare SQL query
+                    SqlCommand commandGetProductImages = new SqlCommand("select * from [Stock Image] where ID=@id", connectionImages);
+                    commandGetProductImages.Parameters.Add(new SqlParameter("id", ((int)fFileID).ToString()));
+                    commandGetProductImages.CommandTimeout = 0;
+                    SqlDataReader kudosReader = commandGetProductImages.ExecuteReader();
+
+                    //Read the images from the stream and save as files with the image ID as the file name
+                    while (kudosReader.Read())
+                    {
+                        //Write binary data into the file if it doesn't exist
+                            byte[] oFileData = (byte[])kudosReader.GetValue(kudosReader.GetOrdinal("Image"));
+                            if (oFileData != null && oFileData.Length > 0)
+                            {
+                                System.IO.File.WriteAllBytes(sFilePath, oFileData); //only save the file if there is data to save
+                            }
+                            else
+                            {
+                                //log the problem
+                                System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Encountered an empty file for: " + sImageName, System.Diagnostics.EventLogEntryType.Warning);
+                            }
+                    }
+                    kudosReader.Close();
+                }
+
+                //add the file name the index for future reference
+                if (!arSavedImageIDs.Contains(fFileID))
+                {
+                    if (arSavedImageIDs.Count == arSavedImageIDs.Capacity) arSavedImageIDs.Capacity += 100; //bump the capacity to ease memalloc
+                    arSavedImageIDs.Add(fFileID);
+                }
             }
-
-            kudosReader.Close();
-
-            //Push the collection into an array
-            string[] sOut = new string[oListOfFiles.Count];
-            oListOfFiles.CopyTo(sOut, 0);
-            return sOut;
-
         }
 
         /// <summary>
-        /// Image IDs are stored as a list in a file to avoid exporting them more than once
+        /// Image and row IDs are stored as a list in a file to avoid exporting them more than once
         /// </summary>
         /// <returns></returns>
-        static System.Collections.Specialized.StringCollection GetExportedImageIDs ()
+        static List<long> GetExportedIDs(string FileNameKey)
         {
-            string sFilePath = ConfigurationManager.AppSettings.Get("ImgIdx");
+            string sFilePath = ConfigurationManager.AppSettings.Get(FileNameKey);
             if (!File.Exists(sFilePath))
             {
-                   File.Create(sFilePath).Close(); //create a new one if it doesn't exist
+                File.Create(sFilePath).Close(); //create a new one if it doesn't exist
             }
+
             //load the file
             StreamReader oFile = File.OpenText(sFilePath);
-            System.Collections.Specialized.StringCollection arSavedImageIDs = new System.Collections.Specialized.StringCollection();
+            List<long> arValues = new List<long>();
 
             //read the lines one at a time
             while (!oFile.EndOfStream)
             {
                 string sLine = oFile.ReadLine(); // add only good lines
-                if (sLine!=null && sLine!="" && !arSavedImageIDs.Contains(sLine)) arSavedImageIDs.Add(sLine);
+                //convert to float for performance
+                long fValue = 0;
+                long.TryParse(sLine, out fValue);
+
+                //add the value to the array if it's not yet there
+                if (sLine != null && sLine != "" && !arValues.Contains(fValue)) arValues.Add(fValue);
+
+                //bump the capacity if it's at the limit
+                if (arValues.Count == arValues.Capacity) arValues.Capacity += 1000;
+
             }
 
             oFile.Close();
-            return arSavedImageIDs;
+
+            //sort the array
+            arValues.TrimExcess();
+            arValues.Sort();
+
+            return arValues;
         }
+
+
 
         /// <summary>
         ///Image IDs are stored as a list in a file to avoid exporting them more than once
         /// </summary>
-        /// <param name="arSavedImageIDs"></param>
-        static void SaveExportedImageIDs(System.Collections.Specialized.StringCollection arSavedImageIDs)
+        /// <param name="arSavedIDs"></param>
+        static void SaveExportedIDs(List<long> arSavedIDs, string FileNameKey)
         {
-            string sFilePath = ConfigurationManager.AppSettings.Get("ImgIdx");
+            string sFilePath = ConfigurationManager.AppSettings.Get(FileNameKey);
+            arSavedIDs.TrimExcess(); //not sure it makes any difference
 
             //load the file
             StreamWriter oFile = File.CreateText(sFilePath);
 
             //write the lines one at a time
-            foreach (string sLine in arSavedImageIDs) oFile.WriteLine(sLine);
+            foreach (long sLine in arSavedIDs) oFile.WriteLine(sLine);
 
             //save the data
             oFile.Flush();
             oFile.Close();
         }
 
+
         /// <summary>
-        /// Put the CSV data into a .zip file
+        /// Calculate a quick hash consisting of SKU as the whole and sRecord.GetHashCode as one long integer
         /// </summary>
-        /// <param name="sCsvFile"></param>
-        /// <param name="CSV"></param>
-        static void CreateCsvArchive(string sCsvFile, StringBuilder CSV)
+        /// <param name="sRecord"></param>
+        /// <param name="sSKU"></param>
+        /// <returns></returns>
+        static long CalculateHash(string sRecord, string sSKU)
         {
-            using (var zipStream = new MemoryStream())
-            {
-                using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
-                {
-                    var sZippedCsvFile = archive.CreateEntry(Path.GetFileName(sCsvFile));
-
-                    using (var entryStream = sZippedCsvFile.Open())
-                    using (var streamWriter = new StreamWriter(entryStream))
-                    {
-                        streamWriter.Write(CSV.ToString());
-                    }
-                }
-
-                using (var fileStream = new FileStream(sCsvFile + ".zip", FileMode.Create))
-                {
-                    zipStream.Seek(0, SeekOrigin.Begin);
-                    zipStream.CopyTo(fileStream);
-                    fileStream.Close();
-                }
-            }
-
+            long iHash = Math.Abs(sRecord.GetHashCode());
+            long iSKU = 0;
+            sSKU = sSKU.PadRight(19, '0');
+            long.TryParse(sSKU, out iSKU);
+            iHash = iSKU + iHash;
+            return iHash;
         }
 
     }

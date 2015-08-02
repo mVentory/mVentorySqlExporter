@@ -21,14 +21,16 @@ declare @scs as table (
 	category nvarchar(255),
 	branches nvarchar(max),
 	stockgroup nvarchar(255),
-	stockgroupid int
+	stockgroupid int,
+	brand nvarchar(255),
+	imgids nvarchar(255)
 )
 
 -- Populare the temp table with data from several different table. It's faster than doing multiple joins.
 insert into @scs (id, styleid, colorid, sizeid, lookupnum) SELECT [ID],[Style ID],[Colour ID],[Size ID],[Look Up Number] FROM [Style Colour Size]
 update @scs set code=ss.Code, descr=ss.Description, idescrshort=ss.[Internet Short Description], idescrfull=ss.[Internet Description], stockgroupid=ss.[Stock Group ID]  from @scs scs, [Stock Style] ss where scs.styleid=ss.id
 update @scs set stockgroup=sg.Code from @scs scs, [Stock Group] sg where scs.stockgroupid =sg.id
-update @scs set size=ss.Code, sizetm=CONCAT(substring(stockgroup,1,2),'_',ss.Code) from @scs scs, [Stock Size] ss where scs.sizeid=ss.id
+update @scs set size=ss.Code, sizetm=substring(isnull(stockgroup,''),1,2)+'_'+isnull(ss.Code,'') from @scs scs, [Stock Size] ss where scs.sizeid=ss.id
 update @scs set color=sc.Code from @scs scs, [Stock Colour] sc where scs.colorid=sc.id
 
 -- Populate price data
@@ -68,7 +70,7 @@ open branch_cursor
 FETCH NEXT FROM branch_cursor into @branchid, @branchname
 WHILE @@FETCH_STATUS = 0
  BEGIN
-	update @scs set branches=concat(branches, @branchname,':',soh.qty, ';')  from @scs scs, @soh soh where soh.id=scs.id and soh.bid=@branchid and soh.qty>0
+	update @scs set branches=isnull(branches,'') + isnull(@branchname,'') + ':' + convert(nvarchar(20),isnull(soh.qty,0)) + ';'  from @scs scs, @soh soh where soh.id=scs.id and soh.bid=@branchid and soh.qty>0
 	FETCH NEXT FROM branch_cursor into @branchid, @branchname
  END
 CLOSE branch_cursor
@@ -77,8 +79,8 @@ DEALLOCATE branch_cursor
 -- prepare the list of categories (up to 3 levels)
 declare @cats table (title nvarchar(255), id int PRIMARY KEY, pid int)
 insert into @cats SELECT t.title, t.ID, t.[parent id] FROM [Internet Group] t 
-update @cats set title = CONCAT(t.title,'/',c.title), pid=t.[parent id] from @cats c, [Internet Group] t where c.pid = t.ID
-update @cats set title = CONCAT(t.title,'/',c.title), pid=t.[parent id] from @cats c, [Internet Group] t where c.pid = t.ID
+update @cats set title = isnull(t.title,'') + '/' + isnull(c.title,''), pid=t.[parent id] from @cats c, [Internet Group] t where c.pid = t.ID
+update @cats set title = isnull(t.title,'') + '/' + isnull(c.title,''), pid=t.[parent id] from @cats c, [Internet Group] t where c.pid = t.ID
 
 -- build list of categories per product by looping through all categories one at a time and update products in that category
 -- there is a simpler solution using XPATH(''), but it's not documented and may be deprecated any time.
@@ -89,11 +91,36 @@ FETCH NEXT FROM cat_cursor into @catid, @cattitle
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
-	update @scs set category =concat(category, ';', @cattitle) from @scs s, [Stock Internet Group] ig where ig.[Internet Group ID]=@catid and s.styleid=ig.[Stock Style ID]
+	update @scs set category =isnull(category,'') + ';' + isnull(@cattitle,'') from @scs s, [Stock Internet Group] ig where ig.[Internet Group ID]=@catid and s.styleid=ig.[Stock Style ID]
 	FETCH NEXT FROM cat_cursor into @catid, @cattitle
 END
 CLOSE cat_cursor
 DEALLOCATE cat_cursor
 
+--add brand as a separate field even if it comes from categories
+update @scs set brand=title 
+	from @scs s, [Stock Internet Group] sig, [Internet Group] ig 
+	where ig.[ID]=sig.[Internet Group ID] and s.styleid=sig.[Stock Style ID] and ig.[parent id]=8 -- 8 is ID of Brands in the category list
+
+--build list of images
+declare @imgs table(imgids nvarchar(255), scsid int PRIMARY KEY, ssid int, cid int) -- a temp table for a ;-separated list of images per product
+-- prepopulate the table with the list of products
+insert into @imgs (scsid,ssid,cid) select distinct scs.id, im.[Stock Style ID], im.[Stock Colour ID] from [Stock Image Map] im, @scs scs where im.[Stock Style ID]=scs.styleid and im.[Stock Colour ID]=scs.colorid
+-- loop through every image and build a list in the temp table
+declare @imgid int, @cid int, @ssid int
+declare img_cursor CURSOR FOR select ID, [Stock Style ID], [Stock Colour ID] from [Stock Image Map]
+open img_cursor
+FETCH NEXT FROM img_cursor into @imgid, @ssid, @cid
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	update @imgs set imgids =isnull(imgids,'') + ';' + CONVERT(nvarchar(255), @imgid) + '.jpg' where ssid=@ssid and cid=@cid
+	FETCH NEXT FROM img_cursor into @imgid, @ssid, @cid
+END
+CLOSE img_cursor
+DEALLOCATE img_cursor
+-- copy image IDs into the main table 
+update @scs set imgids=imgs.imgids from @scs scs, @imgs imgs where imgs.scsid=scs.id
+
+
 -- return a single flatened data structure
-select * from @scs order by styleid desc, sizeid, colorid
+select * from @scs order by styleid desc, colorid, sizeid

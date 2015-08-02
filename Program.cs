@@ -27,10 +27,17 @@ namespace mvKudos
             Console.WriteLine(ConfigurationManager.AppSettings.Get("WelcomeMsg"));
             Console.WriteLine("Saving into " + sCsvFile);
 
+            //Save current time for reporting later
+            DateTime now = DateTime.Now;
+
+            //Execute the extraction
             mvKudos.DB.exportAllProducts(sCsvFile);
 
-            Console.WriteLine("Done.");
-            
+            //Report the results
+            string sResult = "Done in " + DateTime.Now.Subtract(now).TotalMinutes.ToString() + " minutes.";
+            Console.WriteLine(sResult);
+            System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, sResult, System.Diagnostics.EventLogEntryType.Information);
+
             System.Threading.Thread.Sleep(5000);
         }
 

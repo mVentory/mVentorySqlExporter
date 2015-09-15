@@ -70,6 +70,7 @@ namespace mvKudos
                 oCSV.Add("sizetm", kudosReader["sizetm"].ToString());
                 oCSV.Add("brand", kudosReader["brand"].ToString());
                 oCSV.Add("qty", kudosReader["quantity"].ToString());
+                oCSV.Add("stockgroup", kudosReader["stockgroup"].ToString());
 
                 //Categories are separated by ; and may have a leading/trailing ;
                 string sValue = kudosReader["category"].ToString();

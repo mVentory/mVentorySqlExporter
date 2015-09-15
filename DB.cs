@@ -1,5 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Collections;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -36,15 +36,13 @@ namespace mvKudos
             string sUrlPathFormat = ConfigurationManager.AppSettings.Get("UrlPath");
 
             //load IDs of data processed before. The IDs are stored in files as a list in plain text
-            List<long> arSavedImageIDs = GetExportedIDs("ImgIdx"); //Load the list of image files exported before
+            Hashtable arSavedImageIDs = GetExportedIDs("ImgIdx"); //Load the list of image files exported before
             Console.WriteLine("Loaded ImgIdx. " + DateTime.Now.ToString("s"));
 
-            List<long> arSavedRowIDs = GetExportedIDs("DataIdx"); //Load the list of rows exported before
+            Hashtable arSavedRowIDs = GetExportedIDs("DataIdx"); //Load the list of rows exported before
             Console.WriteLine("Loaded DataIdx. " + DateTime.Now.ToString("s"));
 
-            var arExtractedRowIDs = new List<long>(); //This collection will contain IDs extracted this time to keep the list current
-            //set initial capacity
-            arExtractedRowIDs.Capacity = arSavedRowIDs.Count;
+            var arExtractedRowIDs = new Hashtable(arSavedRowIDs.Count); //This collection will contain IDs extracted this time to keep the list current
 
             ///Prepare the output CSV file
             var oCSV = new System.Collections.Specialized.NameValueCollection();
@@ -96,8 +94,8 @@ namespace mvKudos
                 sRecord = buildCSVRow(oCSV);
 
                 //use a hash of the row to check if the data changed
-                long fHash = CalculateHash(sRecord, sSKU);
-                if (!arSavedRowIDs.Contains(fHash))
+                string sHash = CalculateHash(sRecord, sSKU).ToString();
+                if (!arSavedRowIDs.Contains(sHash))
                 {
                     //get any missing images
                     RetrieveImages(connectionImages, arSavedImageIDs, sImgIDs);
@@ -105,13 +103,13 @@ namespace mvKudos
                     CSV.AppendLine(sRecord);
                 }
                 //save the id in a new array to update the list
-                if (!arExtractedRowIDs.Contains(fHash))
+                if (!arExtractedRowIDs.Contains(sHash))
                 {
-                    arExtractedRowIDs.Add(fHash);
+                    arExtractedRowIDs.Add(sHash,null);
                 }
                 else
                 {
-                    System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Duplicate hash " + fHash.ToString() + " for: " + sRecord, System.Diagnostics.EventLogEntryType.Warning);
+                    System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Duplicate hash " + sHash + " for: " + sRecord, System.Diagnostics.EventLogEntryType.Warning);
                 }
 
                 oCSV.Clear();
@@ -185,7 +183,7 @@ namespace mvKudos
         /// <param name="iStyleID"></param>
         /// <param name="iColorID"></param>
         /// <returns></returns>
-        static void RetrieveImages(SqlConnection connectionImages, List<long> arSavedImageIDs, string sImgIDs)
+        static void RetrieveImages(SqlConnection connectionImages, Hashtable arSavedImageIDs, string sImgIDs)
         {
             if (sImgIDs==null || sImgIDs=="") return; //No point doing anything if there is not enough data
 
@@ -194,23 +192,21 @@ namespace mvKudos
             foreach (string sImageName in arImageNames)
             {
                 //get the file id
-                long fFileID = 0;
-                long.TryParse(sImageName.Replace(".jpg",""), out fFileID); //all images are .jpg or so we assume
-                if (fFileID <= 0) //sanity check
+                string sFileID = sImageName.Replace(".jpg",""); //all images are .jpg or so we assume
+                if (sFileID == "") //sanity check
                 {
                     System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Wrong image file ID: " + sImageName, System.Diagnostics.EventLogEntryType.Warning);
                     continue;
                 }
 
-
                 string sFilePath = ConfigurationManager.AppSettings.Get("FtpFolderPathImg").TrimEnd(new char[] { '\\' }) + "\\" + sImageName;
 
                 //check if the image has already been extracted (either the file exists on the disk or it was indexed)
-                if (!arSavedImageIDs.Contains(fFileID) && !System.IO.File.Exists(sFilePath))
+                if (!arSavedImageIDs.Contains(sFileID) && !System.IO.File.Exists(sFilePath))
                 {
                     //Prepare SQL query
                     SqlCommand commandGetProductImages = new SqlCommand("select * from [Stock Image] where ID=@id", connectionImages);
-                    commandGetProductImages.Parameters.Add(new SqlParameter("id", ((int)fFileID).ToString()));
+                    commandGetProductImages.Parameters.Add(new SqlParameter("id", sFileID));
                     commandGetProductImages.CommandTimeout = 0;
                     SqlDataReader kudosReader = commandGetProductImages.ExecuteReader();
 
@@ -233,11 +229,7 @@ namespace mvKudos
                 }
 
                 //add the file name the index for future reference
-                if (!arSavedImageIDs.Contains(fFileID))
-                {
-                    if (arSavedImageIDs.Count == arSavedImageIDs.Capacity) arSavedImageIDs.Capacity += 100; //bump the capacity to ease memalloc
-                    arSavedImageIDs.Add(fFileID);
-                }
+                if (!arSavedImageIDs.Contains(sFileID)) arSavedImageIDs.Add(sFileID, null);
             }
         }
 
@@ -245,7 +237,7 @@ namespace mvKudos
         /// Image and row IDs are stored as a list in a file to avoid exporting them more than once
         /// </summary>
         /// <returns></returns>
-        static List<long> GetExportedIDs(string FileNameKey)
+        static Hashtable GetExportedIDs(string FileNameKey)
         {
             string sFilePath = ConfigurationManager.AppSettings.Get(FileNameKey);
             if (!File.Exists(sFilePath))
@@ -255,29 +247,18 @@ namespace mvKudos
 
             //load the file
             StreamReader oFile = File.OpenText(sFilePath);
-            List<long> arValues = new List<long>();
+            Hashtable arValues = new Hashtable();
 
             //read the lines one at a time
             while (!oFile.EndOfStream)
             {
                 string sLine = oFile.ReadLine(); // add only good lines
-                //convert to float for performance
-                long fValue = 0;
-                long.TryParse(sLine, out fValue);
 
                 //add the value to the array if it's not yet there
-                if (sLine != null && sLine != "" && !arValues.Contains(fValue)) arValues.Add(fValue);
-
-                //bump the capacity if it's at the limit
-                if (arValues.Count == arValues.Capacity) arValues.Capacity += 1000;
-
+                if (sLine != null && sLine != "" && !arValues.Contains(sLine)) arValues.Add(sLine, null);
             }
 
             oFile.Close();
-
-            //sort the array
-            arValues.TrimExcess();
-            arValues.Sort();
 
             return arValues;
         }
@@ -288,16 +269,15 @@ namespace mvKudos
         ///Image IDs are stored as a list in a file to avoid exporting them more than once
         /// </summary>
         /// <param name="arSavedIDs"></param>
-        static void SaveExportedIDs(List<long> arSavedIDs, string FileNameKey)
+        static void SaveExportedIDs(Hashtable arSavedIDs, string FileNameKey)
         {
             string sFilePath = ConfigurationManager.AppSettings.Get(FileNameKey);
-            arSavedIDs.TrimExcess(); //not sure it makes any difference
 
             //load the file
             StreamWriter oFile = File.CreateText(sFilePath);
 
             //write the lines one at a time
-            foreach (long sLine in arSavedIDs) oFile.WriteLine(sLine);
+            foreach (String sLine in arSavedIDs.Keys) oFile.WriteLine(sLine);
 
             //save the data
             oFile.Flush();

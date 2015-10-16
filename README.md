@@ -69,7 +69,7 @@ winscp.com /script=sync-script.txt /log=ftp-sync-log.txt
 ##### 2. Create `sync-script.txt` file with instructions for winscp:
 
 ```
-option batch abort
+option batch continue
 option confirm off
 open ftp://login:pwd@my.website.com/
 option transfer binary

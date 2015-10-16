@@ -63,6 +63,7 @@ namespace mvKudos
                 oCSV.Add("price", kudosReader["price"].ToString());
                 oCSV.Add("special", kudosReader["special"].ToString());
                 oCSV.Add("color", kudosReader["color"].ToString());
+                oCSV.Add("colorid", kudosReader["colorid"].ToString());
                 oCSV.Add("product_barcode_", kudosReader["lookupnum"].ToString());
                 oCSV.Add("name", kudosReader["descr"].ToString());
                 oCSV.Add("sizetm", kudosReader["sizetm"].ToString());

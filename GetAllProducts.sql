@@ -62,6 +62,16 @@ insert into @qty select [Style/Colour/Size ID], sum(isnull(quantity,0)) as quant
 update @scs set quantity=q.quantity from @scs scs, @qty q where scs.id=q.[Style/Colour/Size ID]
 delete from @qty
 
+-- correct quantities for un-invoiced items
+update @scs set quantity=scs.quantity - q.qtydiff from @scs scs, 
+(
+select sd.[Style/Colour/Size ID], sum(col.Quantity-col.[Quantity Supplied]) as qtydiff
+	from [Customer Order Line] col, [Stock Detail] sd 
+	where col.[Detail ID]=sd.ID and col.[Detail ID]>0 and (col.Quantity-col.[Quantity Supplied])>0
+	group by sd.[Style/Colour/Size ID]
+) q where scs.id=q.[Style/Colour/Size ID]
+
+
 -- delete from @scs where quantity is null or quantity < 1 
 
 -- update quantities per branch

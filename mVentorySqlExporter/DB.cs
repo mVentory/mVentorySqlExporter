@@ -31,7 +31,7 @@ namespace mvSqlExporter
 
             //load IDs of data processed before. The IDs are stored in files as a list in plain text
             Hashtable arSavedRowIDs = GetExportedIDs("DataIdx"); //Load the list of rows exported before
-            Console.WriteLine("Loaded DataIdx. " + DateTime.Now.ToString("s"));
+            Program.Log("Loaded DataIdx.");
 
             var arExtractedRowIDs = new Hashtable(arSavedRowIDs.Count); //This collection will contain IDs extracted this time to keep the list current
 
@@ -45,7 +45,7 @@ namespace mvSqlExporter
             CSV.AppendLine(sDbFields);  //add the header row
 
             //Loop through the recordset and read the data
-            Console.WriteLine("Going through extracted data. " + DateTime.Now.ToString("s"));
+            Program.Log("Going through extracted data." );
 
             while (dbReader.Read())
             {
@@ -67,14 +67,14 @@ namespace mvSqlExporter
                 }
                 else
                 {
-                    System.Diagnostics.EventLog.WriteEntry(Program.EventSourceName, "Duplicate hash " + sHash + " for: " + sRecord, System.Diagnostics.EventLogEntryType.Warning);
+                    Program.Log("Duplicate hash " + sHash + " for: " + sRecord);
                 }
             }
 
             connectionDB.Close(); //Don't need the DB any more.
 
             //report progress
-            Console.WriteLine("Saving data. " + DateTime.Now.ToString("s"));
+            Program.Log("Saving data.");
 
             //Save the data in a temp file with a unique name
             System.IO.File.WriteAllText(sCsvFile, CSV.ToString());
@@ -307,6 +307,13 @@ namespace mvSqlExporter
             sourceFileStream.Close();
             compressingStream.Close();
             destFileStream.Close();
+
+            //delete the source file
+            try
+            {
+                System.IO.File.Delete(sCsvFile);
+            }
+            catch { }
         }
     }
 }

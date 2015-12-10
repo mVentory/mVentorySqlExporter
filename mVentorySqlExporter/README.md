@@ -6,8 +6,6 @@ This application connects to an MS SQL database to extract product data.
 
 * Copy contents of `bin` folder to the destination. .Net 4.0 or later is required.
 
-* Run `mvSqlExporterEventLogSource.reg` with admin rights to add a logging event source
-
 * Check App.config for default settings:
 ** connection string (change DB name, add login/pwd if need to)
 ** default output file names and locations

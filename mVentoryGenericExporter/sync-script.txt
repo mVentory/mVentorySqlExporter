@@ -1,0 +1,7 @@
+option batch abort
+option confirm off
+open ftp://login:pwd@site.url.com
+option transfer binary
+synchronize remote "csv" "/" -criteria=size
+close
+exit 
